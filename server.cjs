@@ -3,8 +3,7 @@ const admin = require('firebase-admin');
 const path = require('path');
 const cors = require('cors');
 
-const serviceAccount = require('./serviceAccountKey.json');
-
+const serviceAccount = require(path.join(process.cwd(), 'serviceAccountKey.json'));
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   projectId: "my-goals-app-89062" 
