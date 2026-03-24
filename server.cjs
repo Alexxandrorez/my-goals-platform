@@ -115,3 +115,30 @@ const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   console.log(`🚀 Сервер працює на порту ${PORT}`);
 });
+
+// DELETE маршрут для видалення запису про виконану ціль (передати goalId та userId,
+// optional: completedAt or completionDate). Повертає { deleted: N }
+app.delete('/api/completed-goals', async (req, res) => {
+  try {
+    // Підтримуємо як query-параметри, так і тіло запиту
+    const source = Object.keys(req.query).length ? req.query : req.body || {};
+    const { goalId, userId } = source;
+    const completedAt = source.completedAt || source.completionDate;
+
+    if (!goalId || !userId) return res.status(400).json({ error: 'goalId and userId required' });
+
+    let query = db.collection('completed_history').where('goalId', '==', goalId).where('userId', '==', userId);
+    if (completedAt) query = query.where('completedAt', '==', completedAt);
+
+    const snapshot = await query.get();
+    if (snapshot.empty) return res.status(200).json({ deleted: 0 });
+
+    const batch = db.batch();
+    snapshot.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+
+    return res.status(200).json({ deleted: snapshot.size });
+  } catch (error) {
+    return res.status(500).json({ error: error.message });
+  }
+});

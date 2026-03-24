@@ -54,20 +54,34 @@ const MyGoals = () => {
   const toggleStatus = async (id) => {
     const goal = goals.find(g => g.id === id);
     if (!goal) return;
-
     let nextStatus = goal.status === 'активні' ? 'завершені' : goal.status === 'завершені' ? 'відкладені' : 'активні';
     let nextProgress = nextStatus === 'завершені' ? 100 : nextStatus === 'відкладені' ? 50 : 0;
     let completedAt = nextStatus === 'завершені' ? new Date().toISOString().split('T')[0] : null;
+    const wasCompleted = goal.status === 'завершені';
 
     try {
       await updateDoc(doc(db, "goals", id), { status: nextStatus, progress: nextProgress, completedAt });
 
+      // Якщо ми позначили як завершене — створюємо запис в історії
       if (nextStatus === 'завершені') {
         await fetch('/api/completed-goals', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ goalId: id, goalTitle: goal.title, category: goal.tag, completionDate: completedAt, userId: user.uid })
         });
+      }
+
+      // Якщо раніше була позначка як завершена, а тепер знімаємо — видаляємо з історії
+      if (wasCompleted && nextStatus !== 'завершені') {
+        try {
+          await fetch('/api/completed-goals', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ goalId: id, userId: user.uid, completedAt: goal.completedAt })
+          });
+        } catch (delErr) {
+          console.error('Помилка видалення з історії:', delErr);
+        }
       }
     } catch (error) { console.error("Помилка оновлення:", error); }
   };
