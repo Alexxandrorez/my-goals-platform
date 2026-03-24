@@ -1,31 +1,51 @@
 import React, { useState, useEffect } from 'react';
 import { auth } from '../firebase';
+import { onAuthStateChanged } from 'firebase/auth';
 
 const Progress = () => {
   const [completedGoals, setCompletedGoals] = useState([]);
   const [selectedDate, setSelectedDate] = useState('');
   const [loading, setLoading] = useState(false);
+  const [user, setUser] = useState(auth.currentUser);
 
+  // 1. Стежимо за станом авторизації, щоб отримати UID
   useEffect(() => {
-    fetchCompletedGoals();
-  }, [selectedDate]);
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Завантажуємо дані, коли змінюється дата АБО з'являється юзер
+  useEffect(() => {
+    if (user) {
+      fetchCompletedGoals();
+    }
+  }, [selectedDate, user]);
 
   const fetchCompletedGoals = async () => {
+    if (!user) return;
+
     setLoading(true);
     try {
-      let url = '/api/completed-goals';
+      // Формуємо параметри запиту
       const params = new URLSearchParams();
-      if (selectedDate) params.append('date', selectedDate);
-      const user = auth.currentUser;
-      if (user && user.uid) params.append('userId', user.uid);
-      const queryString = params.toString();
-      if (queryString) url += `?${queryString}`;
+      params.append('userId', user.uid);
+      if (selectedDate) {
+        params.append('date', selectedDate);
+      }
+
+      const response = await fetch(`/api/completed-goals?${params.toString()}`);
       
-      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error('Помилка сервера');
+      }
+
       const data = await response.json();
       setCompletedGoals(data);
     } catch (error) {
       console.error('Помилка при завантаженні:', error);
+      setCompletedGoals([]); // Очищуємо список при помилці
     } finally {
       setLoading(false);
     }
@@ -76,7 +96,7 @@ const Progress = () => {
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: '60px' }}>
-          <p>Завантаження...</p>
+          <p>Завантаження вашого прогресу...</p>
         </div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '20px' }}>
@@ -89,8 +109,8 @@ const Progress = () => {
               borderRadius: '16px',
               color: '#94a3b8'
             }}>
-              <p style={{ fontSize: '18px' }}>Немає виконаних цілей</p>
-              <p>Завершіть свою першу ціль, щоб побачити її тут!</p>
+              <p style={{ fontSize: '18px' }}>Немає виконаних цілей за цей період</p>
+              <p>Ваші досягнення з'являться тут, щойно ви завершите ціль.</p>
             </div>
           ) : (
             completedGoals.map(goal => (
