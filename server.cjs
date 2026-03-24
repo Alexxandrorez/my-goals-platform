@@ -3,7 +3,11 @@ const admin = require('firebase-admin');
 const path = require('path');
 const cors = require('cors');
 
-const serviceAccount = require(path.join(process.cwd(), 'serviceAccountKey.json'));
+// Шукаємо файл ключа в поточному каталозі процесу (це надійніше для Render)
+const serviceAccountPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
+const serviceAccount = require(serviceAccountPath);
+
+
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   projectId: "my-goals-app-89062" 
@@ -47,10 +51,15 @@ app.post('/api/goals', async (req, res) => {
 
 // ПУНКТ 3: GET маршрут для Прогресу (фільтрація за датою)
 app.get('/api/completed-goals', async (req, res) => {
-  const { date } = req.query; 
+  const { date, userId } = req.query; 
   try {
     let query = db.collection('completed_history');
     
+    // Якщо вказано userId — фільтруємо записами тільки цього користувача
+    if (userId) {
+      query = query.where('userId', '==', userId);
+    }
+
     if (date) {
       // Фільтруємо безпосередньо в запиті до Firestore (Пункт 3)
       query = query.where('completedAt', '==', date);

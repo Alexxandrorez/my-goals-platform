@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { auth } from '../firebase';
 
 const Progress = () => {
   const [completedGoals, setCompletedGoals] = useState([]);
@@ -13,9 +14,12 @@ const Progress = () => {
     setLoading(true);
     try {
       let url = '/api/completed-goals';
-      if (selectedDate) {
-        url += `?date=${selectedDate}`;
-      }
+      const params = new URLSearchParams();
+      if (selectedDate) params.append('date', selectedDate);
+      const user = auth.currentUser;
+      if (user && user.uid) params.append('userId', user.uid);
+      const queryString = params.toString();
+      if (queryString) url += `?${queryString}`;
       
       const response = await fetch(url);
       const data = await response.json();
