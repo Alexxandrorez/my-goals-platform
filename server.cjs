@@ -3,10 +3,9 @@ const admin = require('firebase-admin');
 const path = require('path');
 const cors = require('cors');
 
-// Шукаємо файл ключа в поточному каталозі процесу (це надійніше для Render)
+// Шукаємо файл ключа в поточному каталозі процесу
 const serviceAccountPath = path.resolve(process.cwd(), 'serviceAccountKey.json');
 const serviceAccount = require(serviceAccountPath);
-
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -22,13 +21,13 @@ app.use(cors());
 // ПУНКТ 1: Роздача статичних файлів React
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// API: отримати/створити цілі (клієнт може використовувати /api/goals для POST створення)
+// API: отримати цілі
 app.get('/api/goals', async (req, res) => {
   try {
     const { userId } = req.query;
-    let query = db.collection('goals');
-    if (userId) query = query.where('userId', '==', userId);
+    if (!userId) return res.status(400).json({ error: 'userId is required' });
 
+    let query = db.collection('goals').where('userId', '==', userId);
     const snapshot = await query.get();
     const goals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     res.json(goals);
@@ -40,7 +39,6 @@ app.get('/api/goals', async (req, res) => {
 app.post('/api/goals', async (req, res) => {
   try {
     const data = req.body || {};
-    // Додаємо serverTimestamp для відстеження створення
     data.createdAt = admin.firestore.Timestamp.now();
     const ref = await db.collection('goals').add(data);
     res.status(201).json({ success: true, id: ref.id });
@@ -49,19 +47,21 @@ app.post('/api/goals', async (req, res) => {
   }
 });
 
-// ПУНКТ 3: GET маршрут для Прогресу (фільтрація за датою)
+// ПУНКТ 3: ВИПРАВЛЕНО - GET маршрут для Прогресу
 app.get('/api/completed-goals', async (req, res) => {
   const { date, userId } = req.query; 
-  try {
-    let query = db.collection('completed_history');
-    
-    // Якщо вказано userId — фільтруємо записами тільки цього користувача
-    if (userId) {
-      query = query.where('userId', '==', userId);
-    }
+  
+  // КРИТИЧНО: Якщо userId не передано, повертаємо порожній масив або помилку
+  if (!userId) {
+    return res.status(400).json({ error: "userId is required to fetch progress" });
+  }
 
+  try {
+    // Починаємо запит ОБОВ'ЯЗКОВО з фільтрації по конкретному користувачу
+    let query = db.collection('completed_history').where('userId', '==', userId);
+    
+    // Якщо додана дата — додаємо ще один фільтр
     if (date) {
-      // Фільтруємо безпосередньо в запиті до Firestore (Пункт 3)
       query = query.where('completedAt', '==', date);
     }
 
@@ -69,6 +69,7 @@ app.get('/api/completed-goals', async (req, res) => {
     const goals = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
     res.json(goals);
   } catch (error) {
+    console.error("Помилка Firestore:", error);
     res.status(500).json([]);
   }
 });
@@ -77,15 +78,19 @@ app.get('/api/completed-goals', async (req, res) => {
 app.post('/api/completed-goals', async (req, res) => {
   try {
     const { goalId, goalTitle, category, completionDate, userId } = req.body;
+    
+    if (!userId) return res.status(400).json({ error: "userId is required" });
+
     const entry = {
       goalId,
-      title: goalTitle,
-      tag: category,
-      completedAt: completionDate, // Поле часу виконання (Пункт 4)
+      goalTitle: goalTitle, // Використовуємо уніфіковану назву
+      category: category,
+      completedAt: completionDate, 
       userId,
       serverTimestamp: admin.firestore.Timestamp.now()
     };
-    // Захист від дублювання: перевіряємо чи вже є запис з тим же goalId, userId і completedAt
+
+    // Захист від дублювання
     const dupQuery = db.collection('completed_history')
       .where('goalId', '==', goalId)
       .where('userId', '==', userId)
@@ -94,7 +99,6 @@ app.post('/api/completed-goals', async (req, res) => {
 
     const dupSnapshot = await dupQuery.get();
     if (!dupSnapshot.empty) {
-      // Якщо вже є - повертаємо успіх, але не додаємо ще раз
       return res.status(200).json({ success: true, duplicated: true });
     }
 
@@ -116,18 +120,19 @@ app.listen(PORT, () => {
   console.log(`🚀 Сервер працює на порту ${PORT}`);
 });
 
-// DELETE маршрут для видалення запису про виконану ціль (передати goalId та userId,
-// optional: completedAt or completionDate). Повертає { deleted: N }
+// DELETE маршрут
 app.delete('/api/completed-goals', async (req, res) => {
   try {
-    // Підтримуємо як query-параметри, так і тіло запиту
     const source = Object.keys(req.query).length ? req.query : req.body || {};
     const { goalId, userId } = source;
     const completedAt = source.completedAt || source.completionDate;
 
     if (!goalId || !userId) return res.status(400).json({ error: 'goalId and userId required' });
 
-    let query = db.collection('completed_history').where('goalId', '==', goalId).where('userId', '==', userId);
+    let query = db.collection('completed_history')
+                  .where('goalId', '==', goalId)
+                  .where('userId', '==', userId);
+    
     if (completedAt) query = query.where('completedAt', '==', completedAt);
 
     const snapshot = await query.get();
