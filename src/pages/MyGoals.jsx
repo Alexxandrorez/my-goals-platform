@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import GoalCard from '../components/GoalCard';
 import { db, auth } from '../firebase'; 
+import { onAuthStateChanged } from 'firebase/auth';
 import { collection, query, where, onSnapshot, updateDoc, doc } from 'firebase/firestore';
 
 const MyGoals = () => {
@@ -9,17 +10,34 @@ const MyGoals = () => {
   const [showForm, setShowForm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [newGoal, setNewGoal] = useState({ title: '', tag: 'IT & Code', deadline: '', description: '' });
+  
+  // Стан для поточного користувача
+  const [currentUser, setCurrentUser] = useState(auth.currentUser);
 
-  const user = auth.currentUser;
-
+  // 1. Стежимо за авторизацією (щоб уникнути замикання старого юзера)
   useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, "goals"), where("userId", "==", user.uid));
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // 2. Завантажуємо цілі тільки коли currentUser визначений
+  useEffect(() => {
+    if (!currentUser) {
+      setGoals([]); // Очищуємо список, якщо ніхто не залогінений
+      return;
+    }
+
+    const q = query(
+      collection(db, "goals"), 
+      where("userId", "==", currentUser.uid)
+    );
     
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const goalsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       
-      // Сортуємо вручну по даті створення (createdAt)
+      // Сортуємо по даті створення (свіжі зверху)
       const sorted = goalsData.sort((a, b) => {
         const t1 = a.createdAt?.seconds || 0;
         const t2 = b.createdAt?.seconds || 0;
@@ -27,19 +45,24 @@ const MyGoals = () => {
       });
       setGoals(sorted);
     });
+
     return () => unsubscribe();
-  }, [user]);
+  }, [currentUser]);
 
   const handleAddGoal = async (e) => {
     e.preventDefault();
     if (!newGoal.title || !newGoal.deadline) return alert("Заповніть назву та дату!");
+    if (!currentUser) return alert("Ви не авторизовані!");
+    
     setLoading(true);
-
     try {
       const response = await fetch('/api/goals', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...newGoal, userId: user.uid }),
+        body: JSON.stringify({ 
+          ...newGoal, 
+          userId: currentUser.uid // Використовуємо актуальний UID
+        }),
       });
 
       if (response.ok) {
@@ -48,42 +71,60 @@ const MyGoals = () => {
       }
     } catch (error) {
       console.error("Помилка створення:", error);
-    } finally { setLoading(false); }
+    } finally { 
+      setLoading(false); 
+    }
   };
 
   const toggleStatus = async (id) => {
+    if (!currentUser) return;
+
     const goal = goals.find(g => g.id === id);
     if (!goal) return;
+
     let nextStatus = goal.status === 'активні' ? 'завершені' : goal.status === 'завершені' ? 'відкладені' : 'активні';
     let nextProgress = nextStatus === 'завершені' ? 100 : nextStatus === 'відкладені' ? 50 : 0;
-    let completedAt = nextStatus === 'завершені' ? new Date().toISOString().split('T')[0] : null;
+    let completedAtDate = nextStatus === 'завершені' ? new Date().toISOString().split('T')[0] : null;
     const wasCompleted = goal.status === 'завершені';
 
     try {
-      await updateDoc(doc(db, "goals", id), { status: nextStatus, progress: nextProgress, completedAt });
+      // 1. Оновлюємо основну ціль у Firestore
+      await updateDoc(doc(db, "goals", id), { 
+        status: nextStatus, 
+        progress: nextProgress, 
+        completedAt: completedAtDate 
+      });
 
-      // Якщо ми позначили як завершене — створюємо запис в історії
+      // 2. Якщо статус став "завершені" — пишемо в історію через API
       if (nextStatus === 'завершені') {
         await fetch('/api/completed-goals', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ goalId: id, goalTitle: goal.title, category: goal.tag, completionDate: completedAt, userId: user.uid })
+          body: JSON.stringify({ 
+            goalId: id, 
+            goalTitle: goal.title, 
+            category: goal.tag, 
+            completionDate: completedAtDate, 
+            userId: currentUser.uid 
+          })
         });
       }
 
-      // Якщо раніше була позначка як завершена, а тепер знімаємо — видаляємо з історії
+      // 3. Якщо зняли статус "завершені" — видаляємо з історії
       if (wasCompleted && nextStatus !== 'завершені') {
-        try {
-          await fetch('/api/completed-goals', {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ goalId: id, userId: user.uid, completedAt: goal.completedAt })
-          });
-        } catch (delErr) {
-          console.error('Помилка видалення з історії:', delErr);
-        }
+        await fetch('/api/completed-goals', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            goalId: id, 
+            userId: currentUser.uid, 
+            completedAt: goal.completedAt 
+          })
+        });
       }
-    } catch (error) { console.error("Помилка оновлення:", error); }
+    } catch (error) { 
+      console.error("Помилка оновлення статусу:", error); 
+    }
   };
 
   const filteredGoals = goals.filter(g => filter === 'всі' ? true : g.status === filter);
@@ -118,7 +159,13 @@ const MyGoals = () => {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '20px' }}>
-        {filteredGoals.map(goal => <GoalCard key={goal.id} goal={goal} onToggle={() => toggleStatus(goal.id)} />)}
+        {filteredGoals.length === 0 && !loading ? (
+          <p style={{ color: '#94a3b8' }}>Цілей поки немає.</p>
+        ) : (
+          filteredGoals.map(goal => (
+            <GoalCard key={goal.id} goal={goal} onToggle={() => toggleStatus(goal.id)} />
+          ))
+        )}
       </div>
     </div>
   );
